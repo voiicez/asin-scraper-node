@@ -10,7 +10,13 @@ function ensurePageParam(url) {
   return url.includes("page=") ? url : url + (url.includes("?") ? "&page=" : "?page=");
 }
 
-async function scrapeSinglePage(browser, url) {
+async function scrapeSinglePage(proxy, url) {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--disable-blink-features=AutomationControlled'],
+    proxy: proxy ? { server: proxy } : undefined
+  });
+
   const context = await browser.newContext({
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
   });
@@ -31,7 +37,7 @@ async function scrapeSinglePage(browser, url) {
     const visible = await page.isVisible('div[data-asin]');
     if (!visible) {
       console.log(`⚠️ Görünür ürün bulunamadı: ${url}`);
-      await context.close();
+      await browser.close();
       return [];
     }
 
@@ -46,12 +52,12 @@ async function scrapeSinglePage(browser, url) {
     }
 
     console.log(`✅ ${asins.length} ASIN bulundu: ${url}`);
-    await context.close();
+    await browser.close();
     return asins;
 
   } catch (e) {
     console.log(`❌ Hata oluştu (${url}): ${e.message}`);
-    await context.close();
+    await browser.close();
     return [];
   }
 }
@@ -75,25 +81,23 @@ async function asyncPool(poolLimit, array, iteratorFn) {
   return Promise.all(ret);
 }
 
-async function getAsinsParallel(baseUrl, maxPages = 5, concurrency = 5) {
+async function getAsinsParallel(baseUrl, maxPages = 5, concurrency = 5, proxy = null) {
   const asins = new Set();
-  const browser = await chromium.launch({ headless: true, args: ['--disable-blink-features=AutomationControlled'] });
-
   const urls = Array.from({ length: maxPages }, (_, i) => `${baseUrl}${i + 1}`);
 
-  const results = await asyncPool(concurrency, urls, url => scrapeSinglePage(browser, url));
+  const results = await asyncPool(concurrency, urls, url => scrapeSinglePage(proxy, url));
 
   for (const result of results) {
     result.forEach(asin => asins.add(asin));
   }
 
-  await browser.close();
   return Array.from(asins);
 }
 
 app.get('/get-asins', async (req, res) => {
   const baseUrlParam = req.query.url;
   const maxPagesParam = req.query.pages;
+  const proxyParam = req.query.proxy;
 
   if (!baseUrlParam) {
     return res.status(400).json({ error: "Lütfen 'url' parametresi sağlayın." });
@@ -102,13 +106,14 @@ app.get('/get-asins', async (req, res) => {
   const baseUrl = ensurePageParam(baseUrlParam);
   const maxPages = parseInt(maxPagesParam) || 5;
   const concurrency = parseInt(req.query.concurrency) || 5;
+
   if (isNaN(maxPages)) {
     return res.status(400).json({ error: "'pages' sayısal bir değer olmalıdır." });
   }
 
   try {
-    console.log(`📥 Paralel API isteği: ${baseUrl} (pages=${maxPages})`);
-    const asins = await getAsinsParallel(baseUrl, maxPages, concurrency); // paralel sekme sayısı = 5
+    console.log(`📥 Paralel API isteği: ${baseUrl} (pages=${maxPages}, proxy=${proxyParam || 'yok'})`);
+    const asins = await getAsinsParallel(baseUrl, maxPages, concurrency, proxyParam);
     return res.json({ count: asins.length, asins });
   } catch (e) {
     console.error("❌ Bir hata oluştu:", e);
