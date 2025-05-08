@@ -114,19 +114,17 @@ if (cluster.isMaster) {
     }
     return url;
   }
-
   function addSortToUrl(url, sort) {
     const baseUrl = url.split('&s=')[0].split('?s=')[0];
     const connector = baseUrl.includes('?') ? '&' : '?';
     return `${baseUrl}${connector}s=${sort}`;
   }
-
+  
   function addSearchTermToUrl(url, term) {
     const baseUrl = url.split('&k=')[0].split('?k=')[0];
     const connector = baseUrl.includes('?') ? '&' : '?';
     return `${baseUrl}${connector}k=${term}`;
   }
-
   function buildCategoryUrl(baseUrl, categoryId) {
     const parsedUrl = new URL(baseUrl);
     const path = parsedUrl.pathname.split('/');
@@ -145,18 +143,160 @@ if (cluster.isMaster) {
       return `${urlParts[0]}i=${categoryId}${restOfUrl}`;
     }
   }
+// Amazon URL'sinden ülke tespiti için yardımcı fonksiyon
+function detectCountryFromAmazonUrl(url) {
+  try {
+    const hostname = new URL(url).hostname;
+    
+    // Amazon domain-ülke eşleştirmeleri
+    const amazonDomainMap = {
+      'amazon.com': 'us',
+      'amazon.co.uk': 'gb',
+      'amazon.de': 'de', 
+      'amazon.fr': 'fr',
+      'amazon.it': 'it',
+      'amazon.es': 'es',
+      'amazon.co.jp': 'jp',
+      'amazon.ca': 'ca',
+      'amazon.com.br': 'br',
+      'amazon.com.mx': 'mx',
+      'amazon.com.au': 'au', 
+      'amazon.in': 'in',
+      'amazon.nl': 'nl',
+      'amazon.se': 'se',
+      'amazon.pl': 'pl',
+      'amazon.com.tr': 'tr',
+      'amazon.ae': 'ae',
+      'amazon.sa': 'sa',
+      'amazon.sg': 'sg'
+    };
+    
+    // Domain'e göre ülke kodunu bul
+    for (const [domain, countryCode] of Object.entries(amazonDomainMap)) {
+      if (hostname.includes(domain)) {
+        console.log(`🌍 URL ${url} için ülke tespit edildi: ${countryCode.toUpperCase()}`);
+        return countryCode;
+      }
+    }
+    
+    // Eşleşme bulunamazsa varsayılan olarak US kullan
+    console.log(`⚠️ URL ${url} için ülke tespit edilemedi, varsayılan US kullanılıyor`);
+    return 'us';
+  } catch (error) {
+    console.error(`❌ Ülke tespiti sırasında hata: ${error.message}`);
+    return 'us'; // Hata durumunda varsayılan
+  }
+}
+
+// OxyLabs proxy URL'si oluşturan fonksiyon
+function getOxylabsProxy(countryCode) {
+  // OxyLabs kimlik bilgileri
+  const OXYLABS_USERNAME = "customer-behlul_x6NlH";
+  const OXYLABS_PASSWORD = "_Deneme12345";
+  
+  // Ülke kodlarına göre port numaraları haritası
+  const countryPortMap = {
+    'us': 10000,
+    'ca': 30000,
+    'gb': 20000,
+    'de': 30000,
+    'fr': 40000,
+    'es': 10000,
+    'it': 20000,
+    'se': 30000,
+    'gr': 40000,
+    'pt': 10000,
+    'nl': 20000,
+    'be': 30000,
+    'ru': 40000,
+    'ua': 10000,
+    'pl': 20000,
+    'il': 20000,
+    'tr': 30000,
+    'au': 40000,
+    'my': 10000,
+    'th': 20000,
+    'kr': 30000,
+    'jp': 40000,
+    'ph': 10000,
+    'sg': 20000,
+    'cn': 30000,
+    'hk': 40000,
+    'tw': 10000,
+    'in': 20000,
+    'pk': 30000,
+    'ir': 40000,
+    'id': 10000,
+    'az': 20000,
+    'kz': 30000,
+    'ae': 40000,
+    'mx': 10000,
+    'br': 20000,
+    'ar': 30000,
+    'cl': 40000,
+    'pe': 10000,
+    'ec': 20000,
+    'co': 30000,
+    'za': 40000,
+    'eg': 10000,
+    'sa': 44000,
+    'dk': 19000,
+    // Daha fazla ülke eklenebilir
+  };
+  
+  // Varsayılan port
+  const defaultPort = 10000;
+  
+  // Geçerli ülke kodu kontrolü
+  if (!countryCode) {
+    console.warn('⚠️ Ülke kodu belirtilmedi, varsayılan US kullanılıyor');
+    countryCode = 'us';
+  }
+  
+  // Küçük harfe çevir
+  countryCode = countryCode.toUpperCase();
+  
+  // Ülke koduna göre port numarasını belirle
+  const port = countryPortMap[countryCode] || defaultPort;
+  const username = `${OXYLABS_USERNAME}-cc-${countryCode}`;
+  // Ülkeye özel OxyLabs Proxy URL'si oluştur
+  return new URL(`http://${username}:${OXYLABS_PASSWORD}@pr.oxylabs.io:${port}`);
+
+}
+
+// URL için uygun proxy'yi döndüren fonksiyon
+function getProxyForUrl(url) {
+  if (!url) {
+    console.warn('⚠️ URL belirtilmedi, proxy kullanılmıyor');
+    return null;
+  }
+  
+  const countryCode = detectCountryFromAmazonUrl(url);
+  const proxy = getOxylabsProxy(countryCode);
+  return proxy;
+}
 
   // Tekli sayfa kazıma - optimize edilmiş
   async function scrapeSinglePage(url, proxy = null) {
     let browser = null;
     let forceClose = false;
-    
+    let proxySettings;
+if (proxy) {
+  const proxyUrl = new URL(proxy);
+  proxySettings = {
+    server: `${proxyUrl.protocol}//${proxyUrl.hostname}:${proxyUrl.port}`,
+    username: decodeURIComponent(proxyUrl.username),
+    password: decodeURIComponent(proxyUrl.password)
+  };
+
+}
+
     try {
       browser = await getBrowser();
       
       const context = await browser.newContext({
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-        proxy: proxy ? { server: proxy } : undefined,
+       proxy: proxySettings,
         // Her istekte çerezleri temizle
         clearCookiesAfterUse: true,
         // JavaScript başarım iyileştirmesi
@@ -167,7 +307,23 @@ if (cluster.isMaster) {
       });
       
       const page = await context.newPage();
-      
+
+// 🌐 Proxy test ve ısındırma
+try {
+  await page.goto('https://ip.oxylabs.io/location', { waitUntil: 'load' });
+  const ipCheck = await page.evaluate(() => document.body.innerText);
+  console.log(`🌐 Proxy IP kontrol sonucu:\n${ipCheck}`);
+  await page.waitForTimeout(500); // Bağlantıyı stabilize etmek için
+} catch (e) {
+  console.warn('⚠️ Proxy kontrol başarısız:', e.message);
+}
+
+// 🔄 Buradaki 'url', zaten scrape edilecek hedef sayfa
+await page.goto(url, { 
+  timeout: 30000,
+  waitUntil: 'load'
+});
+
       // Gereksiz kaynakları engelle (daha agresif filtreleme)
       await page.route('**/*', route => {
         const request = route.request();
@@ -224,77 +380,22 @@ if (cluster.isMaster) {
         console.log(`⚠️ ASIN listesi beklerken zaman aşımı: ${url} - ${e.message}`);
       }
 
-      // Doğrudan ASIN'leri içeren elementleri hedefle, daha kapsamlı DOM taraması
       const asins = await page.evaluate(() => {
-        // JavaScript daha hızlı çalışır çünkü tarayıcıda değerlendiriliyor
-        const results = new Set(); // Benzersiz ASIN'ler için Set kullan
-        
-        // 1. Ana Amazon ASIN div'leri
+        const results = new Set();
         const asinContainers = document.querySelectorAll('div[data-asin]');
+      
         for (const container of asinContainers) {
           const asin = container.getAttribute('data-asin');
-          if (asin && asin.trim() !== "" && asin.length === 10) {
+      
+          // ASIN boş değilse ve gerçekten 10 karakterlik kodsa
+          if (asin && asin.length === 10) {
             results.add(asin);
           }
         }
-        
-        // 2. Ürün linklerindeki ASIN'ler
-        const productLinks = document.querySelectorAll('a[href*="/dp/"]');
-        for (const link of productLinks) {
-          const href = link.getAttribute('href');
-          if (href) {
-            // /dp/ sonrası 10 karakter ASIN'dir
-            const match = href.match(/\/dp\/([A-Z0-9]{10})/);
-            if (match && match[1]) {
-              results.add(match[1]);
-            }
-          }
-        }
-        
-        // 3. Input değerlerindeki ASIN'ler
-        const inputs = document.querySelectorAll('input[name="ASIN"], input[name="asin"]');
-        for (const input of inputs) {
-          const asin = input.value;
-          if (asin && asin.trim() !== "" && asin.length === 10) {
-            results.add(asin);
-          }
-        }
-        
-        // 4. Amazon Twinister ve diğer formatları
-        const allElements = document.querySelectorAll('[data-asin], [data-a-dynamic-image], [data-p13n-asin-metadata]');
-        for (const element of allElements) {
-          // Doğrudan data-asin özniteliği
-          const asin = element.getAttribute('data-asin');
-          if (asin && asin.trim() !== "" && asin.length === 10) {
-            results.add(asin);
-          }
-          
-          // JSON veri yapısı içinde olabilecek ASIN'ler
-          const jsonAttrs = ['data-a-dynamic-image', 'data-p13n-asin-metadata'];
-          for (const attr of jsonAttrs) {
-            const jsonData = element.getAttribute(attr);
-            if (jsonData) {
-              try {
-                // ASIN formatına uyan tüm desenleri ara
-                const asinMatches = jsonData.match(/[A-Z0-9]{10}/g);
-                if (asinMatches) {
-                  for (const match of asinMatches) {
-                    // Amazon ASIN'lerin formatını kontrol et (büyük harf ve sayı)
-                    if (/^[A-Z0-9]{10}$/.test(match)) {
-                      results.add(match);
-                    }
-                  }
-                }
-              } catch (e) {
-                // JSON ayrıştırma hataları
-              }
-            }
-          }
-        }
-        
-        // Set'ten array'e dönüştür
+      
         return Array.from(results);
       });
+      
       
       // Kategori ID'lerini toplama - yeni fonksiyon
       let categories = [];
@@ -363,19 +464,34 @@ if (cluster.isMaster) {
     }
   }
 
-  // Ana ASIN toplama fonksiyonu - tamamen yeniden yazıldı
   async function getAsinsWithStrategy(config) {
     const { 
       baseUrl, 
       maxPages = 20,
       targetAsinCount = 0,
       concurrency = 5, 
-      proxy = null,
+      proxy = null,  // Mevcut parametre
+      useOxylabsProxy = true, // Yeni parametre
       sortOptions = DEFAULT_SORT_OPTIONS,
       searchTerms = [],
       maxEmptyPagesInRow = 3,
-      enableCategorySearch = true // Yeni parametre: Kategori aramasını etkinleştir/devre dışı bırak
+      enableCategorySearch = true 
     } = config;
+  
+    // Ülkeye özgü proxy belirle
+    let actualProxy = proxy; // Kullanıcının sağladığı proxy varsa onu koru
+    if (useOxylabsProxy && !proxy) {
+      actualProxy = getProxyForUrl(baseUrl);
+      if (actualProxy) {
+        // Şifreyi gizleyerek loglama
+        const maskedProxy = actualProxy.toString().replace(/:[^:]*@/, ':***@');
+
+        console.log(`🔒 Ülkeye özel OxyLabs proxy kullanılıyor: ${maskedProxy}`);
+      } else {
+        console.log(`⚠️ OxyLabs proxy oluşturulamadı, proxy kullanılmadan devam ediliyor`);
+      }
+    }
+  
 
     // Tüm benzersiz ASIN'leri depolamak için
     const allAsins = new Set();
@@ -422,7 +538,8 @@ if (cluster.isMaster) {
     
     if (enableCategorySearch) {
       // Kategorileri getir
-      categories = await fetchCategories(baseUrl, proxy);
+      // Kategorileri getir
+categories = await fetchCategories(baseUrl, actualProxy);
       stats.categoriesFound = categories.length;
       
       // 2. STRATEJİ: Her bir kategori için sıralama seçeneklerini uygula
@@ -552,7 +669,8 @@ if (cluster.isMaster) {
         const batchStartTime = Date.now();
         
         // URL'leri paralel olarak işle
-        const promises = currentBatch.map(urlObj => scrapeSinglePage(urlObj.url, proxy));
+        // URL'leri paralel olarak işle
+const promises = currentBatch.map(urlObj => scrapeSinglePage(urlObj.url, actualProxy));
         const results = await Promise.all(promises);
         
         let batchHasResults = false;
@@ -637,70 +755,72 @@ if (cluster.isMaster) {
     };
   }
 
-  // GET endpoint - kategoriler için parametre eklendi
-  app.get('/get-asins', async (req, res) => {
-    const baseUrlParam = req.query.url;
-    const maxPagesParam = req.query.pages;
-    const targetAsinCountParam = req.query.target_asins;
-    const proxyParam = req.query.proxy;
-    const sortParam = req.query.sort;
-    const useSearchTerms = req.query.use_search === 'true';
-    const concurrencyParam = req.query.concurrency;
-    const maxEmptyPagesParam = req.query.max_empty_pages;
-    const useCategoriesParam = req.query.use_categories !== 'false'; // Varsayılan olarak kategori araması açık
+  // GET endpoint - düzeltilmiş versiyon
+app.get('/get-asins', async (req, res) => {
+  const baseUrlParam = req.query.url;
+  const maxPagesParam = req.query.pages;
+  const targetAsinCountParam = req.query.target_asins;
+  const proxyParam = req.query.proxy; // Bu satır eksik olabilir, ekliyoruz
+  const useOxylabsProxyParam = req.query.use_oxylabs_proxy !== 'false'; // Varsayılan olarak aktif
+  const sortParam = req.query.sort;
+  const useSearchTerms = req.query.use_search === 'true';
+  const concurrencyParam = req.query.concurrency;
+  const maxEmptyPagesParam = req.query.max_empty_pages;
+  const useCategoriesParam = req.query.use_categories !== 'false';
 
-    if (!baseUrlParam) {
-      return res.status(400).json({ error: "Lütfen 'url' parametresi sağlayın." });
-    }
+  if (!baseUrlParam) {
+    return res.status(400).json({ error: "Lütfen 'url' parametresi sağlayın." });
+  }
 
-    const maxPages = parseInt(maxPagesParam) || 20;
-    const targetAsinCount = parseInt(targetAsinCountParam) || 0;
-    const concurrency = parseInt(concurrencyParam) || 3;
-    const maxEmptyPagesInRow = parseInt(maxEmptyPagesParam) || 3;
+  const maxPages = parseInt(maxPagesParam) || 20;
+  const targetAsinCount = parseInt(targetAsinCountParam) || 0;
+  const concurrency = parseInt(concurrencyParam) || 3;
+  const maxEmptyPagesInRow = parseInt(maxEmptyPagesParam) || 3;
 
-    if (isNaN(maxPages)) {
-      return res.status(400).json({ error: "'pages' sayısal bir değer olmalıdır." });
+  if (isNaN(maxPages)) {
+    return res.status(400).json({ error: "'pages' sayısal bir değer olmalıdır." });
+  }
+  
+  if (isNaN(targetAsinCount)) {
+    return res.status(400).json({ error: "'target_asins' sayısal bir değer olmalıdır." });
+  }
+
+  try {
+    console.log(`📥 API isteği: ${baseUrlParam} (targetAsins=${targetAsinCount}, maxPages=${maxPages}, useCategories=${useCategoriesParam})`);
+    
+    // Sıralama stratejisi
+    let sortOptions = DEFAULT_SORT_OPTIONS;
+    if (sortParam) {
+      sortOptions = [sortParam];
     }
     
-    if (isNaN(targetAsinCount)) {
-      return res.status(400).json({ error: "'target_asins' sayısal bir değer olmalıdır." });
-    }
-
-    try {
-      console.log(`📥 API isteği: ${baseUrlParam} (targetAsins=${targetAsinCount}, maxPages=${maxPages}, useCategories=${useCategoriesParam})`);
-      
-      // Sıralama stratejisi
-      let sortOptions = DEFAULT_SORT_OPTIONS;
-      if (sortParam) {
-        sortOptions = [sortParam];
-      }
-      
-      // Arama terimleri stratejisi
-      const searchTerms = useSearchTerms ? DEFAULT_SEARCH_TERMS : [];
-      
-      const result = await getAsinsWithStrategy({
-        baseUrl: baseUrlParam,
-        maxPages,
-        targetAsinCount,
-        concurrency,
-        proxy: proxyParam,
-        sortOptions,
-        searchTerms,
-        maxEmptyPagesInRow,
-        enableCategorySearch: useCategoriesParam
-      });
-      
-      return res.json({
-        count: result.asins.length,
-        asins: result.asins,
-        stats: result.stats,
-        worker: process.pid
-      });
-    } catch (e) {
-      console.error("❌ Bir hata oluştu:", e);
-      return res.status(500).json({ error: e.message });
-    }
-  });
+    // Arama terimleri stratejisi
+    const searchTerms = useSearchTerms ? DEFAULT_SEARCH_TERMS : [];
+    
+    const result = await getAsinsWithStrategy({
+      baseUrl: baseUrlParam,
+      maxPages,
+      targetAsinCount,
+      concurrency,
+      proxy: proxyParam, // Bu satırda proxyParam kullanılıyor
+      useOxylabsProxy: useOxylabsProxyParam,
+      sortOptions,
+      searchTerms,
+      maxEmptyPagesInRow,
+      enableCategorySearch: useCategoriesParam
+    });
+    
+    return res.json({
+      count: result.asins.length,
+      asins: result.asins,
+      stats: result.stats,
+      worker: process.pid
+    });
+  } catch (e) {
+    console.error("❌ Bir hata oluştu:", e);
+    return res.status(500).json({ error: e.message });
+  }
+});
 
   // POST endpoint - gelişmiş kullanım (yeni parametre eklendi)
   app.post('/get-asins-advanced', async (req, res) => {
