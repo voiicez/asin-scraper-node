@@ -306,7 +306,16 @@ if (proxy) {
         ignoreHTTPSErrors: true
       });
       
+      
       const page = await context.newPage();
+
+// 🔍 CDP üzerinden trafik ölçümü başlat
+const client = await context.newCDPSession(page);
+let totalBytesTransferred = 0;
+await client.send('Network.enable');
+client.on('Network.loadingFinished', (event) => {
+  totalBytesTransferred += event.encodedDataLength || 0;
+});
 
 // 🌐 Proxy test ve ısındırma
 try {
@@ -323,30 +332,45 @@ await page.goto(url, {
   timeout: 30000,
   waitUntil: 'load'
 });
+console.log(`📦 Gerçek veri kullanımı: ${(totalBytesTransferred / 1024 / 1024).toFixed(2)} MB`);
+await page.route('**/*', route => {
+  const url = route.request().url();
+  const type = route.request().resourceType();
 
-      // Gereksiz kaynakları engelle (daha agresif filtreleme)
-      await page.route('**/*', route => {
-        const request = route.request();
-        const resourceType = request.resourceType();
-        const url = request.url();
-        
-        // Gereksiz kaynakları ve Amazon analytics'i engelle
-        if (["image", "font", "stylesheet", "media", "other"].includes(resourceType) ||
-            url.includes("amazon-adsystem") || 
-            url.includes("analytics") || 
-            url.includes("metrics") ||
-            url.includes(".jpg") || 
-            url.includes(".png") || 
-            url.includes(".gif") || 
-            url.includes(".css")) {
-          route.abort();
-        } else {
-          route.continue();
-        }
-      });
+  // Kapsamlı engelleme listesi
+  const blockIfUrlIncludes = [
+    'amazon-adsystem',
+    'googlesyndication',
+    'doubleclick',
+    'gstatic',
+    'google-analytics',
+    'fls-na.amazon',
+    'fls-eu.amazon',
+    'unagi',
+    'm.media-amazon.com',
+    'images-na.ssl-images-amazon.com',
+    'images-eu.ssl-images-amazon.com',
+    'media-amazon'
+  ];
+
+  const blockedTypes = ['image', 'stylesheet', 'media', 'font', 'other'];
+
+  if (
+    blockedTypes.includes(type) ||
+    blockIfUrlIncludes.some(part => url.includes(part))
+  ) {
+    return route.abort();
+  }
+
+  return route.continue();
+});
+
+
+
 
       // Timeout ayarlarını optimize et - süreyi arttırdık
       await page.goto(url, { 
+        
         timeout: 30000, // 30 saniye olarak ayarlandı
         waitUntil: 'load' // JavaScript'in yüklenmesi için 'load' kullanıyoruz
       });
@@ -670,7 +694,7 @@ categories = await fetchCategories(baseUrl, actualProxy);
         
         // URL'leri paralel olarak işle
         // URL'leri paralel olarak işle
-const promises = currentBatch.map(urlObj => scrapeSinglePage(urlObj.url, actualProxy));
+        const promises = currentBatch.map(urlObj => scrapeSinglePage(urlObj.url, actualProxy));
         const results = await Promise.all(promises);
         
         let batchHasResults = false;
@@ -821,36 +845,6 @@ app.get('/get-asins', async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 });
-
-  // POST endpoint - gelişmiş kullanım (yeni parametre eklendi)
-  app.post('/get-asins-advanced', async (req, res) => {
-    const config = req.body;
-    
-    if (!config || !config.baseUrl) {
-      return res.status(400).json({ error: "Lütfen 'baseUrl' içeren bir konfigürasyon sağlayın." });
-    }
-    
-    // Kategori araması için varsayılan değer belirleme
-    if (config.enableCategorySearch === undefined) {
-      config.enableCategorySearch = true;
-    }
-    
-    try {
-      console.log(`📥 Gelişmiş API isteği: ${config.baseUrl} (kategoriler: ${config.enableCategorySearch ? 'açık' : 'kapalı'})`);
-      const result = await getAsinsWithStrategy(config);
-      
-      return res.json({
-        count: result.asins.length,
-        asins: result.asins,
-        stats: result.stats,
-        worker: process.pid
-      });
-    } catch (e) {
-      console.error("❌ Bir hata oluştu:", e);
-      return res.status(500).json({ error: e.message });
-    }
-  });
-
   // Tarayıcı havuzunu başlat ve sunucuyu çalıştır
   const PORT = process.env.PORT || 5000;
   
@@ -870,11 +864,3 @@ app.get('/get-asins', async (req, res) => {
   });
 }
 
-// package.json dependencies:
-// {
-//   "dependencies": {
-//     "express": "^4.17.1",
-//     "playwright": "^1.17.0",
-//     "cors": "^2.8.5"
-//   }
-// }
