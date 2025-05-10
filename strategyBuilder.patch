@@ -1,0 +1,38 @@
+--- a/strategyBuilder.js
++++ b/strategyBuilder.js
+@@
+ const { addSortToUrl, addSearchTermToUrl, ensurePageParam, buildCategoryUrl, chunkArray } = require('./utils');
+ const { scrapeSinglePage } = require('./scraper');
+ const { MAX_BROWSERS } = require('./browserPools');
++const { getProxyForUrl } = require('./utils');
+
+ async function fetchCategories(baseUrl, proxy) {
+   console.log(`🔍 Kategoriler inceleniyor: ${baseUrl}`);
+@@ async function getAsinsWithStrategy(config) {
+   const {
+     baseUrl,
+     maxPages = 20,
+     targetAsinCount = 0,
+     concurrency = 5,
+-    proxy = null,
++    proxy = null, // Kullanıcının sağladığı proxy (opsiyonel)
+     useOxylabsProxy = true,
+     sortOptions = [],
+     searchTerms = [],
+     maxEmptyPagesInRow = 3,
+     enableCategorySearch = true
+   } = config;
+
++  let actualProxy = proxy;
++  if (useOxylabsProxy && !actualProxy) {
++    actualProxy = getProxyForUrl(baseUrl);
++    if (actualProxy) {
++      const masked = actualProxy.toString().replace(/:[^:]*@/, ':***@');
++      console.log(`🔒 OxyLabs proxy kullanılacak: ${masked}`);
++    } else {
++      console.warn('⚠️ Proxy belirlenemedi, sistem IP kullanılacak.');
++    }
++  }
+
+   const allAsins = new Set();
+   let totalBytes = 0;
