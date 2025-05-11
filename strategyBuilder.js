@@ -2,6 +2,8 @@ const { addSortToUrl, addSearchTermToUrl, ensurePageParam, buildCategoryUrl, chu
 const { scrapeSinglePage } = require('./scraper');
 const { MAX_BROWSERS } = require('./browserPools');
 const { getProxyForUrl } = require('./utils');
+const { DEFAULT_PRICE_SEGMENTS } = require('./defaultValues');
+const { addPriceRangeToUrl } = require('./utils');
 
 async function fetchCategories(baseUrl, actualProxy) {
   console.log(`🔍 Kategoriler inceleniyor: ${baseUrl}`);
@@ -79,13 +81,15 @@ async function getAsinsWithStrategy(config) {
   // STRATEJİ 2: Kategoriler
   let categories = [];
   if (enableCategorySearch) {
-    categories = await fetchCategories(baseUrl, proxy);
+    categories = await fetchCategories(baseUrl, actualProxy);
     stats.categoriesFound = categories.length;
 
     for (const category of categories) {
       const categoryBaseUrl = buildCategoryUrl(baseUrl, category.id);
       for (const sort of sortOptions) {
         const sortedCategoryUrl = addSortToUrl(categoryBaseUrl, sort);
+        console.log(`🧭 Kategori URL oluşturuldu: ${sortedCategoryUrl}`);
+
         const urls = [];
         for (let i = 1; i <= maxPages; i++) {
           urls.push({
@@ -146,6 +150,26 @@ async function getAsinsWithStrategy(config) {
         }
       }
     }
+    // STRATEJİ 4: Fiyat Aralığına Göre Segmentasyon (sadece relevance ile)
+for (const segment of DEFAULT_PRICE_SEGMENTS) {
+  const pricedUrl = addPriceRangeToUrl(baseUrl, segment.min, segment.max);
+  const urls = [];
+  for (let i = 1; i <= maxPages; i++) {
+    urls.push({
+      url: `${ensurePageParam(pricedUrl)}${i}`,
+      type: 'price_range',
+      strategy: `${segment.min}-${segment.max ?? 'MAX'} USD`,
+      priceMin: segment.min,
+      priceMax: segment.max,
+      page: i
+    });
+  }
+  urlStrategies.push({
+    type: 'price_range',
+    name: `${segment.min}-${segment.max ?? 'MAX'} USD`,
+    urls
+  });
+}
   }
 
   // STRATEJİLERİ UYGULA
@@ -191,6 +215,13 @@ async function getAsinsWithStrategy(config) {
           stats.errorRequests++;
         }
       }
+// İlerleme durumunu logla
+if (targetAsinCount > 0) {
+  const progressPercentage = Math.min(100, Math.round((allAsins.size / targetAsinCount) * 100));
+  console.log(`📊 İlerleme: ${allAsins.size}/${targetAsinCount} ASIN (%${progressPercentage})`);
+} else {
+  console.log(`📊 Toplam: ${allAsins.size} benzersiz ASIN bulundu`);
+}
 
       if (!batchHasResults) emptyPagesInRow++;
     }

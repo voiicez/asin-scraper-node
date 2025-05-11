@@ -122,12 +122,13 @@ async function scrapeSinglePage(url, proxy = null) {
     let categories = [];
     try {
       categories = await page.evaluate(() => {
-        const categoryElements = document.querySelectorAll('#departments .a-spacing-micro .a-link-normal');
+        const categoryElements = document.querySelectorAll('#departments a[href*="rh=n:"], aside a[href*="rh=n:"], .s-navigation-indent-1 a[href*="rh=n:"], .a-unordered-list a[href*="rh=n:"], .a-spacing-micro a[href*="rh=n:"], a[href*="node="]');
         const results = [];
+      
         for (const element of categoryElements) {
           const url = element.getAttribute('href');
           if (url) {
-            const match = url.match(/[?&]i=([^&]+)/);
+            const match = url.match(/rh=n%3A(\d+)/) || url.match(/node=(\d+)/);
             if (match && match[1]) {
               const categoryId = match[1];
               const categoryName = element.textContent.trim();
@@ -135,8 +136,10 @@ async function scrapeSinglePage(url, proxy = null) {
             }
           }
         }
+      
         return results;
       });
+      
     } catch (e) {
       console.log(`⚠️ Kategori çıkarma hatası: ${e.message}`);
     }

@@ -6,7 +6,7 @@ function ensurePageParam(url) {
   }
   
   function addSortToUrl(url, sort) {
-    const baseUrl = url.split('&s=')[0].split('?s=')[0];
+    let baseUrl = url.replace(/([?&])s=[^&]*/g, ''); // önceki s= parametresini temizle
     const connector = baseUrl.includes('?') ? '&' : '?';
     return `${baseUrl}${connector}s=${sort}`;
   }
@@ -18,18 +18,10 @@ function ensurePageParam(url) {
   }
   
   function buildCategoryUrl(baseUrl, categoryId) {
-    const parsedUrl = new URL(baseUrl);
-    const path = parsedUrl.pathname.split('/');
-    
-    if (!baseUrl.includes('i=')) {
-      const connector = baseUrl.includes('?') ? '&' : '?';
-      return `${baseUrl}${connector}i=${categoryId}`;
-    } else {
-      const urlParts = baseUrl.split('i=');
-      const restOfUrl = urlParts[1].includes('&') ? 
-        urlParts[1].substring(urlParts[1].indexOf('&')) : '';
-      return `${urlParts[0]}i=${categoryId}${restOfUrl}`;
-    }
+    // i=merchant-items varsa temizle
+    baseUrl = baseUrl.replace(/&?i=merchant-items/, '').replace(/&?rh=[^&]*/g, '');
+    const connector = baseUrl.includes('?') ? '&' : '?';
+    return `${baseUrl}${connector}rh=n%3A${categoryId}`;
   }
   
   function chunkArray(array, chunkSize) {
@@ -104,7 +96,12 @@ function getOxylabsProxy(countryCode) {
   return new URL(`http://${OXYLABS_USERNAME}:${OXYLABS_PASSWORD}@${proxy.host}:${proxy.port}`);
 }
 
-  
+function addPriceRangeToUrl(url, minPrice, maxPrice) {
+  const connector = url.includes('?') ? '&' : '?';
+  const priceFilter = `rh=p_36:${minPrice * 100}-${maxPrice ? maxPrice * 100 : ''}`;
+  return `${url}${connector}${priceFilter}`;
+}
+
   
   function getProxyForUrl(url) {
     if (!url) {
@@ -124,6 +121,7 @@ function getOxylabsProxy(countryCode) {
     chunkArray,
     detectCountryFromAmazonUrl,
     getOxylabsProxy,
-    getProxyForUrl
+    getProxyForUrl,
+    addPriceRangeToUrl
   };
   
