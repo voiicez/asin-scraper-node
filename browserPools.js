@@ -1,6 +1,6 @@
 const { chromium } = require('playwright');
 
-const MAX_BROWSERS = 5;
+const MAX_BROWSERS = 2;
 let browserPool = [];
 
 async function initBrowserPool() {

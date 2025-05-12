@@ -92,15 +92,19 @@ async function scrapeSinglePage(url, proxy = null) {
     }
 
     try {
+     const isCaptcha = await page.evaluate(() =>
+  document.body.innerText.includes('Enter the characters you see below') ||
+  document.body.innerText.includes('Sorry, we just need to make sure')
+);
+if (isCaptcha) {
+  console.warn(`🛑 CAPTCHA tespit edildi: ${url}`);
+  return { asins: [], blocked: true };
+}
       console.log(`⏳ ASIN listesi için bekleniyor: ${url}`);
-      await page.waitForFunction(() => {
-        const asinElements = document.querySelectorAll('div[data-asin]');
-        return asinElements.length > 0 ||
-          document.body.textContent.includes('No results') ||
-          document.body.textContent.includes('No hay resultados') ||
-          document.body.textContent.includes('Keine Ergebnisse') ||
-          document.body.textContent.includes('Aucun résultat');
-      }, { timeout: 15000 });
+     await page.waitForFunction(() => {
+  return document.querySelector('div[data-asin]');
+}, { timeout: 10000 });
+
 
       console.log(`✅ ASIN listesi yüklendi veya sonuç yok: ${url}`);
     } catch (e) {
@@ -108,16 +112,13 @@ async function scrapeSinglePage(url, proxy = null) {
     }
 
     const asins = await page.evaluate(() => {
-      const results = new Set();
-      const asinContainers = document.querySelectorAll('div[data-asin]');
-      for (const container of asinContainers) {
-        const asin = container.getAttribute('data-asin');
-        if (asin && asin.length === 10) {
-          results.add(asin);
-        }
-      }
-      return Array.from(results);
-    });
+  const results = new Set();
+  document.querySelectorAll('div[data-asin]').forEach(el => {
+    const asin = el.getAttribute('data-asin');
+    if (asin && asin.length === 10) results.add(asin);
+  });
+  return Array.from(results);
+});
 
     let categories = [];
     try {

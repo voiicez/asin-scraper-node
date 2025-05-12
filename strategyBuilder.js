@@ -4,6 +4,7 @@ const { MAX_BROWSERS } = require('./browserPools');
 const { getProxyForUrl } = require('./utils');
 const { DEFAULT_PRICE_SEGMENTS } = require('./defaultValues');
 const { addPriceRangeToUrl } = require('./utils');
+const {addPriceToExistingRh} = require('./utils');
 
 async function fetchCategories(baseUrl, actualProxy) {
   console.log(`🔍 Kategoriler inceleniyor: ${baseUrl}`);
@@ -62,6 +63,43 @@ async function getAsinsWithStrategy(config) {
   };
 
   const urlStrategies = [];
+// STRATEJİ 0: Sistematik fiyat segmentasyonu
+const priceSegments = [];
+let currentMin = 0;
+const STEP = 10;
+const MAX_PRICE = 1000;
+
+while (currentMin < MAX_PRICE) {
+  const currentMax = currentMin + STEP;
+  priceSegments.push({ min: currentMin, max: currentMax });
+  currentMin = currentMax;
+}
+
+const systematicSegments = [];
+
+for (const { min, max } of priceSegments) {
+  const priceUrl = addPriceToExistingRh(baseUrl, min, max);
+  const urls = [];
+  for (let i = 1; i <= maxPages; i++) {
+    urls.push({
+      url: `${ensurePageParam(priceUrl)}${i}`,
+      type: 'price_range_static',
+      strategy: `${min}-${max} CAD`,
+      priceMin: min,
+      priceMax: max,
+      page: i
+    });
+  }
+  systematicSegments.push({
+    type: 'price_range_static',
+    name: `price_${min}_${max}`,
+    urls
+  });
+}
+console.log(`💰 ${systematicSegments.length} statik fiyat segmenti oluşturuldu`);
+urlStrategies.unshift(...systematicSegments);
+
+
 
   // STRATEJİ 1: Sıralamalar
   for (const sort of sortOptions) {
@@ -211,6 +249,7 @@ for (const segment of DEFAULT_PRICE_SEGMENTS) {
           }
         } else if (result.blocked) {
           stats.blockedRequests++;
+           console.warn(`🛑 Captcha engeliyle karşılaşıldı: ${urlInfo.url}`);
         } else {
           stats.errorRequests++;
         }

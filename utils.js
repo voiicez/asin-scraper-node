@@ -101,6 +101,14 @@ function addPriceRangeToUrl(url, minPrice, maxPrice) {
   const priceFilter = `rh=p_36:${minPrice * 100}-${maxPrice ? maxPrice * 100 : ''}`;
   return `${url}${connector}${priceFilter}`;
 }
+function addPriceToExistingRh(url, min, max) {
+  const parsed = new URL(url);
+  const rh = parsed.searchParams.get('rh') || '';
+  const price = `p_36:${min * 100}-${max * 100}`;
+  const updatedRh = rh.includes('p_36') ? rh : rh ? `${rh},${price}` : price;
+  parsed.searchParams.set('rh', updatedRh);
+  return parsed.toString();
+}
 
   
   function getProxyForUrl(url) {
@@ -122,6 +130,7 @@ function addPriceRangeToUrl(url, minPrice, maxPrice) {
     detectCountryFromAmazonUrl,
     getOxylabsProxy,
     getProxyForUrl,
-    addPriceRangeToUrl
+    addPriceRangeToUrl,
+     addPriceToExistingRh // BU SATIR EKLENDİ
   };
   
