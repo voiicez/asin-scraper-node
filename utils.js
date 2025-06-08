@@ -1,3 +1,39 @@
+const WebshareProxyManager = require('./webshareManager');
+let webshareManager = null;
+// WebshareProxyManager'ı başlat
+async function initWebshareProxies() {
+  webshareManager = new WebshareProxyManager();
+  await webshareManager.loadProxies();
+  return webshareManager;
+}
+
+// Webshare proxy al
+function getWebshareProxy() {
+  if (!webshareManager) {
+    console.warn('⚠️ WebshareProxyManager henüz başlatılmamış');
+    return null;
+  }
+  
+  const proxy = webshareManager.getNextProxy();
+  return proxy ? webshareManager.getProxySettings(proxy) : null;
+}
+
+// Webshare proxy sonucu kaydet
+function recordWebshareResult(proxySettings, success, responseTime = 0) {
+  if (!webshareManager || !proxySettings) return;
+  
+  // Proxy ID'sini server string'inden çıkar
+  const serverParts = proxySettings.server.replace('http://', '').split(':');
+  const proxyId = `${serverParts[0]}:${serverParts[1]}`;
+  
+  webshareManager.recordProxyResult(proxyId, success, responseTime);
+}
+
+// Webshare proxy istatistikleri
+function getWebshareStats() {
+  return webshareManager ? webshareManager.getProxyStats() : null;
+}
+
 function ensurePageParam(url) {
     if (!url.includes("page=")) {
       return url + (url.includes("?") ? "&page=" : "?page=");
@@ -131,6 +167,10 @@ function addPriceToExistingRh(url, min, max) {
     getOxylabsProxy,
     getProxyForUrl,
     addPriceRangeToUrl,
-     addPriceToExistingRh // BU SATIR EKLENDİ
+     addPriceToExistingRh,
+       initWebshareProxies,
+  getWebshareProxy,
+  recordWebshareResult,
+  getWebshareStats
   };
   

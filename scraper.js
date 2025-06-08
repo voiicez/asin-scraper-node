@@ -1,159 +1,377 @@
+// scraper.js - Enhanced Bot Detection ile Güncellenmiş (Kategori çıkarma kaldırıldı)
 const { getBrowser, returnBrowser } = require('./browserPools');
-const { detectCountryFromAmazonUrl, getOxylabsProxy } = require('./utils');
+const WebshareProxyManager = require('./webshareManager');
+const BrowserFingerprintManager = require('./fingerprintManager');
+const HumanBehaviorSimulator = require('./humanBehavior');
+const AdvancedCaptchaHandler = require('./captchaHandler');
+const SessionManager = require('./sessionManager');
 
-async function scrapeSinglePage(url, proxy = null) {
-  let browser = null;
-  let forceClose = false;
-  let proxySettings;
-  let totalBytesTransferred = 0;
+const URLValidator = require('./urlValidator');
 
-  if (proxy) {
-    const proxyUrl = new URL(proxy);
-    proxySettings = {
-      server: `${proxyUrl.protocol}//${proxyUrl.hostname}:${proxyUrl.port}`,
-      username: decodeURIComponent(proxyUrl.username),
-      password: decodeURIComponent(proxyUrl.password)
-    };
+// Global managers
+let webshareManager = null;
+const fingerprintManager = new BrowserFingerprintManager();
+const captchaHandler = new AdvancedCaptchaHandler();
+const sessionManager = new SessionManager();
+const urlValidator = new URLValidator();
+
+// Initialize WebshareProxyManager
+async function initWebshareProxies() {
+  if (!webshareManager) {
+    webshareManager = new WebshareProxyManager();
+    await webshareManager.loadProxies();
+    console.log('🌐 Webshare proxy sistemi hazır');
+  }
+  return webshareManager;
+}
+
+async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) {
+  // URL validation first
+  const urlValidation = urlValidator.validateAndCleanURL(url);
+  if (!urlValidation.isValid) {
+    console.error(`❌ Geçersiz URL: ${url} - ${urlValidation.error}`);
+    
+    // Try alternative URL
+    const altURL = urlValidator.generateAlternativeURL(url);
+    const altValidation = urlValidator.validateAndCleanURL(altURL);
+    
+    if (altValidation.isValid) {
+      console.log(`🔄 Alternative URL kullanılıyor: ${altURL}`);
+      url = altValidation.cleanURL;
+    } else {
+      return { 
+        asins: [], 
+        categories: [], // Kategori boş array olarak döner ama kullanılmaz
+        error: `URL validation failed: ${urlValidation.error}`,
+        responseTime: 0,
+        urlValidationError: true
+      };
+    }
+  } else {
+    url = urlValidation.cleanURL;
+    if (urlValidation.warnings.length > 0) {
+      console.warn(`⚠️ URL warnings: ${urlValidation.warnings.join(', ')}`);
+    }
   }
 
+  let browser = null;
+  let forceClose = false;
+  let proxySettings = null;
+  let selectedProxy = null;
+  let session = null;
+  let behavior = null;
+  let fingerprint = null;
+  const startTime = Date.now();
+
   try {
+    // Webshare proxy manager'ı başlat
+    if (useWebshareProxy && !webshareManager) {
+      await initWebshareProxies();
+    }
+
+    // Session yönetimi
+    if (sessionId) {
+      session = sessionManager.getSession(sessionId);
+      if (!session) {
+        console.warn(`⚠️ Session bulunamadı, yeni session oluşturuluyor: ${sessionId}`);
+      }
+    }
+
+    // Proxy seçimi
+    if (useWebshareProxy && webshareManager) {
+      selectedProxy = webshareManager.getNextProxy();
+      if (!selectedProxy) {
+        console.warn('⚠️ Webshare proxy alınamadı, proxy olmadan devam ediliyor');
+        proxySettings = null;
+      } else {
+        proxySettings = webshareManager.getProxySettings(selectedProxy);
+        console.log(`🌐 Webshare proxy seçildi: ${selectedProxy.ip}`);
+        
+        // Session yoksa proxy bilgisi ile oluştur
+        if (!session && selectedProxy) {
+          sessionId = sessionManager.createSession(selectedProxy, 'us');
+          session = sessionManager.getSession(sessionId);
+        }
+      }
+    } else if (useWebshareProxy && !webshareManager) {
+      console.warn('⚠️ Webshare manager henüz yüklenmemiş, başlatılıyor...');
+      try {
+        await initWebshareProxies();
+        selectedProxy = webshareManager.getNextProxy();
+        if (selectedProxy) {
+          proxySettings = webshareManager.getProxySettings(selectedProxy);
+          console.log(`🌐 Geç yüklenen proxy kullanılıyor: ${selectedProxy.ip}`);
+        }
+      } catch (e) {
+        console.warn('⚠️ Webshare proxy başlatılamadı:', e.message);
+        proxySettings = null;
+      }
+    }
+
+    // Fingerprint ve behavior
+    if (session) {
+      fingerprint = session.fingerprint;
+      behavior = session.behavior;
+    } else {
+      fingerprint = fingerprintManager.generateFingerprint('us');
+      behavior = new HumanBehaviorSimulator();
+    }
+
+    // Browser context oluşturma
     browser = await getBrowser();
-    const context = await browser.newContext({
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-      proxy: proxySettings,
+    
+    const contextOptions = fingerprintManager.prepareContextOptions(fingerprint);
+    contextOptions.proxy = proxySettings;
+    
+    // Enhanced context settings
+    Object.assign(contextOptions, {
       clearCookiesAfterUse: true,
       javaScriptEnabled: true,
       bypassCSP: true,
       ignoreHTTPSErrors: true
     });
+    
+    // Proxy settings - null check ekle
+    if (proxySettings && proxySettings.server) {
+      contextOptions.proxy = proxySettings;
+      console.log(`🌐 Proxy kullanılıyor: ${proxySettings.server.replace('http://', '')}`);
+    } else {
+      console.log(`🌐 Proxy olmadan devam ediliyor`);
+      // Proxy yoksa context options'tan proxy'yi kaldır
+      delete contextOptions.proxy;
+    }
 
+    const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
 
-    const client = await context.newCDPSession(page);
+    // Advanced anti-detection script injection
+    await page.addInitScript(fingerprintManager.getAntiDetectionScript(fingerprint));
+
+    // İnsan benzeri davranış - sayfa yüklenmeden önce delay
+    if (behavior) {
+      await behavior.humanDelay();
+    }
+
+    // Intelligent resource blocking
+    await page.route('**/*', route => {
+      const requestUrl = route.request().url();
+      const type = route.request().resourceType();
+
+      const blockPatterns = [
+        'amazon-adsystem',
+        'googlesyndication', 
+        'doubleclick',
+        'google-analytics',
+        'googletagmanager',
+        'gstatic.com',
+        'fls-na.amazon',
+        'fls-eu.amazon',
+        'unagi',
+        'm.media-amazon.com',
+        'amazonwebservices.com'
+      ];
+
+      // Akıllı blocking - bazı kaynakları geçir (daha doğal)
+      const shouldBlock = 
+        blockPatterns.some(pattern => requestUrl.includes(pattern)) ||
+        (type === 'image' && Math.random() < 0.85) || // %85 image engelle
+        (type === 'stylesheet' && Math.random() < 0.70) || // %70 CSS engelle
+        (type === 'font' && Math.random() < 0.90) || // %90 font engelle
+        (type === 'media' && Math.random() < 0.95); // %95 media engelle
+
+      return shouldBlock ? route.abort() : route.continue();
+    });
+
+    // Request performance monitoring
     let totalBytesTransferred = 0;
+    const client = await context.newCDPSession(page);
     await client.send('Network.enable');
     client.on('Network.loadingFinished', (event) => {
       totalBytesTransferred += event.encodedDataLength || 0;
     });
 
-    try {
-        await page.goto('https://ip.oxylabs.io/location', { waitUntil: 'load' });
-        const rawText = await page.evaluate(() => document.body.innerText);
-        const ipData = JSON.parse(rawText);
-      
-        const ip = ipData.ip || 'N/A';
-        const city =
-          ipData.providers?.dbip?.city ||
-          ipData.providers?.ip2location?.city ||
-          ipData.providers?.maxmind?.city ||
-          'Unknown';
-      
-        console.log(`🌐 Proxy IP: ${ip} | Location: ${city}`);
-        await page.waitForTimeout(500);
-      } catch (e) {
-        console.warn('⚠️ Proxy kontrol başarısız:', e.message);
-      }
-
-    await page.route('**/*', route => {
-      const url = route.request().url();
-      const type = route.request().resourceType();
-
-      const blockIfUrlIncludes = [
-        'amazon-adsystem', 'googlesyndication', 'doubleclick', 'gstatic',
-        'google-analytics', 'fls-na.amazon', 'fls-eu.amazon', 'unagi',
-        'm.media-amazon.com', 'images-na.ssl-images-amazon.com',
-        'images-eu.ssl-images-amazon.com', 'media-amazon'
-      ];
-
-      const blockedTypes = ['image', 'stylesheet', 'media', 'font', 'other'];
-
-      if (
-        blockedTypes.includes(type) ||
-        blockIfUrlIncludes.some(part => url.includes(part))
-      ) {
-        return route.abort();
-      }
-
-      return route.continue();
-    });
-
+    // Ana sayfa yükleme
+    console.log(`📄 Sayfa yükleniyor: ${url}`);
     await page.goto(url, {
-      timeout: 30000,
-      waitUntil: 'load'
+      timeout: 35000,
+      waitUntil: 'domcontentloaded'
     });
 
-    const isBlocked = await page.content().then(html =>
-      html.includes('Enter the characters you see below') ||
-      html.includes('Sorry, we just need to make sure')
-    );
-    if (isBlocked) {
-      await context.close();
-      return { asins: [], blocked: true };
-    }
-
-    try {
-     const isCaptcha = await page.evaluate(() =>
-  document.body.innerText.includes('Enter the characters you see below') ||
-  document.body.innerText.includes('Sorry, we just need to make sure')
-);
-if (isCaptcha) {
-  console.warn(`🛑 CAPTCHA tespit edildi: ${url}`);
-  return { asins: [], blocked: true };
-}
-      console.log(`⏳ ASIN listesi için bekleniyor: ${url}`);
-     await page.waitForFunction(() => {
-  return document.querySelector('div[data-asin]');
-}, { timeout: 10000 });
-
-
-      console.log(`✅ ASIN listesi yüklendi veya sonuç yok: ${url}`);
-    } catch (e) {
-      console.log(`⚠️ ASIN listesi beklerken zaman aşımı: ${url} - ${e.message}`);
-    }
-
-    const asins = await page.evaluate(() => {
-  const results = new Set();
-  document.querySelectorAll('div[data-asin]').forEach(el => {
-    const asin = el.getAttribute('data-asin');
-    if (asin && asin.length === 10) results.add(asin);
-  });
-  return Array.from(results);
-});
-
-    let categories = [];
-    try {
-      categories = await page.evaluate(() => {
-        const categoryElements = document.querySelectorAll('#departments a[href*="rh=n:"], aside a[href*="rh=n:"], .s-navigation-indent-1 a[href*="rh=n:"], .a-unordered-list a[href*="rh=n:"], .a-spacing-micro a[href*="rh=n:"], a[href*="node="]');
-        const results = [];
+    // CAPTCHA detection ve handling
+    const hasCaptcha = await captchaHandler.detectCaptcha(page);
+    if (hasCaptcha) {
+      console.warn(`🛑 CAPTCHA tespit edildi: ${url}`);
       
-        for (const element of categoryElements) {
-          const url = element.getAttribute('href');
-          if (url) {
-            const match = url.match(/rh=n%3A(\d+)/) || url.match(/node=(\d+)/);
-            if (match && match[1]) {
-              const categoryId = match[1];
-              const categoryName = element.textContent.trim();
-              results.push({ id: categoryId, name: categoryName });
-            }
-          }
+      const captchaResolved = await captchaHandler.handleCaptcha(
+        page, 
+        selectedProxy, 
+        sessionManager, 
+        sessionId
+      );
+      
+      if (!captchaResolved) {
+        await context.close();
+        const responseTime = Date.now() - startTime;
+        
+        // Proxy ve session sonucu kaydet
+        if (selectedProxy) {
+          webshareManager.recordProxyResult(selectedProxy.id, false, responseTime, 'captcha');
         }
+        if (sessionId) {
+          sessionManager.recordSessionResult(sessionId, false, responseTime, true);
+        }
+        
+        return { asins: [], categories: [], blocked: true, captcha: true, responseTime };
+      }
+    }
+
+    // İnsan benzeri davranış simülasyonu
+    if (behavior) {
+      await behavior.performFullBehaviorSimulation(page);
+    }
+
+    // %20 ihtimalle random navigation
+    if (Math.random() < 0.20) {
+      await performRandomNavigation(page);
+    }
+
+    // ASIN bekleme (geliştirilmiş)
+    console.log(`⏳ ASIN listesi bekleniyor: ${url}`);
+    
+    try {
+      await page.waitForFunction(() => {
+        return document.querySelector('div[data-asin]') || 
+               document.querySelector('[data-component-type="s-search-result"]') ||
+               document.body.innerText.includes('No results') ||
+               document.body.innerText.includes('no results found') ||
+               document.body.innerText.includes('did not match any products');
+      }, { timeout: 20000 });
       
-        return results;
+      console.log(`✅ ASIN listesi yüklendi: ${url}`);
+    } catch (e) {
+      console.log(`⚠️ ASIN bekleme timeout: ${url} - Devam ediliyor`);
+    }
+
+    // Final CAPTCHA check
+    if (await captchaHandler.detectCaptcha(page)) {
+      console.warn(`🛑 İkinci CAPTCHA tespit edildi, sayfa atlanıyor: ${url}`);
+      await context.close();
+      
+      const responseTime = Date.now() - startTime;
+      if (selectedProxy) {
+        webshareManager.recordProxyResult(selectedProxy.id, false, responseTime, 'captcha_final');
+      }
+      if (sessionId) {
+        sessionManager.recordSessionResult(sessionId, false, responseTime, true);
+      }
+      
+      return { asins: [], categories: [], blocked: true, captcha: true, responseTime };
+    }
+
+    // Enhanced ASIN extraction
+    const asins = await page.evaluate(() => {
+      const results = new Set();
+      
+      // Multiple ASIN extraction strategies
+      const strategies = [
+        // Strategy 1: data-asin attribute
+        () => {
+          document.querySelectorAll('div[data-asin], [data-asin]').forEach(el => {
+            const asin = el.getAttribute('data-asin');
+            if (asin && asin.length === 10 && /^[A-Z0-9]{10}$/.test(asin)) {
+              results.add(asin);
+            }
+          });
+        },
+        
+        // Strategy 2: Search result containers
+        () => {
+          document.querySelectorAll('[data-component-type="s-search-result"]').forEach(el => {
+            const asin = el.getAttribute('data-asin');
+            if (asin && asin.length === 10 && /^[A-Z0-9]{10}$/.test(asin)) {
+              results.add(asin);
+            }
+          });
+        },
+        
+        // Strategy 3: Product links
+        () => {
+          document.querySelectorAll('a[href*="/dp/"], a[href*="/gp/product/"]').forEach(link => {
+            const href = link.getAttribute('href');
+            const asinMatch = href.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/);
+            if (asinMatch && asinMatch[1]) {
+              results.add(asinMatch[1]);
+            }
+          });
+        }
+      ];
+      
+      // Execute all strategies
+      strategies.forEach(strategy => {
+        try {
+          strategy();
+        } catch (e) {
+          console.warn('ASIN extraction strategy failed:', e);
+        }
       });
       
-    } catch (e) {
-      console.log(`⚠️ Kategori çıkarma hatası: ${e.message}`);
-    }
+      return Array.from(results);
+    });
+
+    // Kategori çıkarma tamamen kaldırıldı - sadece boş array döner
+    const categories = [];
 
     await context.close();
-    
 
-    return { asins, categories, success: true, bytesTransferred: totalBytesTransferred };
+    // Performance metrics
+    const responseTime = Date.now() - startTime;
+    const mbTransferred = (totalBytesTransferred / 1024 / 1024).toFixed(2);
 
-  } catch (e) {
-    console.log(`❌ Hata: ${url} - ${e.message}`);
+    // Success recording
+    if (selectedProxy) {
+      webshareManager.recordProxyResult(selectedProxy.id, true, responseTime);
+    }
+    if (sessionId) {
+      sessionManager.recordSessionResult(sessionId, true, responseTime, hasCaptcha);
+    }
+
+    console.log(`✅ Scraping başarılı: ${asins.length} ASIN | ${responseTime}ms | ${mbTransferred}MB`);
+
+    return { 
+      asins, 
+      categories, // Artık hep boş array
+      success: true, 
+      responseTime,
+      bytesTransferred: totalBytesTransferred,
+      captcha: hasCaptcha,
+      proxy: selectedProxy?.ip,
+      sessionId
+    };
+
+  } catch (error) {
+    console.log(`❌ Scraping hatası: ${url} - ${error.message}`);
     forceClose = true;
-    return { asins: [], categories: [], error: e.message };
+    
+    const responseTime = Date.now() - startTime;
+    const errorType = error.name || 'UnknownError';
+    
+    // Error recording
+    if (selectedProxy) {
+      webshareManager.recordProxyResult(selectedProxy.id, false, responseTime, errorType);
+    }
+    if (sessionId) {
+      sessionManager.recordSessionResult(sessionId, false, responseTime, false, errorType);
+    }
+    
+    return { 
+      asins: [], 
+      categories: [], 
+      error: error.message,
+      responseTime,
+      errorType,
+      proxy: selectedProxy?.ip,
+      sessionId
+    };
   } finally {
     if (browser) {
       await returnBrowser(browser, forceClose);
@@ -161,6 +379,74 @@ if (isCaptcha) {
   }
 }
 
+// Random navigation helper
+async function performRandomNavigation(page) {
+  try {
+    console.log('🎯 Random navigation simülasyonu');
+    
+    const actions = [
+      // Amazon logo'ya hover
+      async () => {
+        const logo = await page.$('#nav-logo, .nav-logo');
+        if (logo) await logo.hover();
+      },
+      
+      // Search box'a tıklama
+      async () => {
+        const searchBox = await page.$('#twotabsearchtextbox, input[name="field-keywords"]');
+        if (searchBox) {
+          await searchBox.click();
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      },
+      
+      // Category hover
+      async () => {
+        const categories = await page.$$('#nav-shop .nav-a, .nav-category-menu a');
+      },
+      
+      // Scroll biraz
+      async () => {
+        await page.evaluate(() => {
+          window.scrollBy(0, 200 + Math.random() * 300);
+        });
+      }
+    ];
+
+    // 1-2 random action yap
+    const actionCount = Math.floor(Math.random() * 2) + 1;
+    for (let i = 0; i < actionCount; i++) {
+      const randomAction = actions[Math.floor(Math.random() * actions.length)];
+      await randomAction();
+      await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 1200));
+    }
+
+  } catch (error) {
+    console.log('⚠️ Random navigation error:', error.message);
+  }
+}
+
+// Export functions
 module.exports = {
-  scrapeSinglePage
+  scrapeSinglePage,
+  initWebshareProxies,
+  
+  // Manager getters
+  getWebshareManager: () => webshareManager,
+  getFingerprintManager: () => fingerprintManager,
+  getCaptchaHandler: () => captchaHandler,
+  getSessionManager: () => sessionManager,
+  
+  // Stats functions
+  getWebshareStats: () => webshareManager ? webshareManager.getProxyStats() : null,
+  getCaptchaStats: () => captchaHandler.getCaptchaStats(),
+  getSessionStats: () => sessionManager.getSessionStats(),
+  getFingerprintStats: () => fingerprintManager.getStats(),
+  
+  // Utility functions
+  resetWebshareProxies: () => webshareManager ? webshareManager.resetAllProxies() : null,
+  clearAllSessions: () => sessionManager.clearAllSessions(),
+  
+  // Risk assessment
+  getCaptchaRiskAssessment: () => captchaHandler.assessCaptchaRisk()
 };

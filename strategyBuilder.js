@@ -1,56 +1,20 @@
-const { addSortToUrl, addSearchTermToUrl, ensurePageParam, buildCategoryUrl, chunkArray } = require('./utils');
+// strategyBuilder.js - 20.000 ASIN için ultra detaylı micro-segmentation
+const URLValidator = require('./urlValidator');
 const { scrapeSinglePage } = require('./scraper');
-const { MAX_BROWSERS } = require('./browserPools');
-const { getProxyForUrl } = require('./utils');
-const { DEFAULT_PRICE_SEGMENTS } = require('./defaultValues');
-const { addPriceRangeToUrl } = require('./utils');
-const {addPriceToExistingRh} = require('./utils');
 
-async function fetchCategories(baseUrl, actualProxy) {
-  console.log(`🔍 Kategoriler inceleniyor: ${baseUrl}`);
-  try {
-    const result = await scrapeSinglePage(baseUrl, actualProxy);
-    if (result.success && result.categories?.length > 0) {
-      console.log(`✅ ${result.categories.length} kategori bulundu`);
-      return result.categories;
-    } else {
-      console.log(`⚠️ Hiç kategori bulunamadı`);
-      return [];
-    }
-  } catch (e) {
-    console.error(`❌ Kategorileri getirirken hata oluştu: ${e.message}`);
-    return [];
-  }
-}
+const urlValidator = new URLValidator();
 
 async function getAsinsWithStrategy(config) {
   const {
     baseUrl,
     maxPages = 20,
-    targetAsinCount = 0,
-    concurrency = 5,
-    proxy = null,
-    useOxylabsProxy = true,
-    
-    sortOptions = [],
-    searchTerms = [],
-    maxEmptyPagesInRow = 3,
-    enableCategorySearch = true
+    targetAsinCount = 20000, // 20K ASIN hedefi
+    concurrency = 3,
+    maxEmptyPagesInRow = 2,
+    storefrontId = null
   } = config;
-  let actualProxy = proxy;
-  if (useOxylabsProxy && !actualProxy) {
-    const { getProxyForUrl } = require('./utils');
-    actualProxy = getProxyForUrl(baseUrl);
-    if (actualProxy) {
-      const masked = actualProxy.toString().replace(/:[^:]*@/, ':***@');
-      console.log(`🔒 OxyLabs proxy kullanılacak: ${masked}`);
-    } else {
-      console.warn('⚠️ Proxy belirlenemedi, sistem IP kullanılacak.');
-    }
-  }
-  const allAsins = new Set();
-  let totalBytes = 0;
 
+  const allAsins = new Set();
   const stats = {
     successfulRequests: 0,
     blockedRequests: 0,
@@ -58,223 +22,366 @@ async function getAsinsWithStrategy(config) {
     pagesProcessed: 0,
     strategiesUsed: 0,
     strategiesSkipped: 0,
-    categoriesFound: 0,
-    categoriesSearched: 0
+    urlValidationErrors: 0,
+    strategiesCompleted: 0,
+    detectedStorefrontId: extractStorefrontId(baseUrl),
+    segmentPerformance: {}
   };
 
-  const urlStrategies = [];
-// STRATEJİ 0: Sistematik fiyat segmentasyonu
-const priceSegments = [];
-let currentMin = 0;
-const STEP = 10;
-const MAX_PRICE = 1000;
-
-while (currentMin < MAX_PRICE) {
-  const currentMax = currentMin + STEP;
-  priceSegments.push({ min: currentMin, max: currentMax });
-  currentMin = currentMax;
-}
-
-const systematicSegments = [];
-
-for (const { min, max } of priceSegments) {
-  const priceUrl = addPriceToExistingRh(baseUrl, min, max);
-  const urls = [];
-  for (let i = 1; i <= maxPages; i++) {
-    urls.push({
-      url: `${ensurePageParam(priceUrl)}${i}`,
-      type: 'price_range_static',
-      strategy: `${min}-${max} CAD`,
-      priceMin: min,
-      priceMax: max,
-      page: i
-    });
+  // URL validation
+  const urlValidation = urlValidator.validateAndCleanURL(baseUrl);
+  if (!urlValidation.isValid) {
+    throw new Error(`URL validation failed: ${urlValidation.error}`);
   }
-  systematicSegments.push({
-    type: 'price_range_static',
-    name: `price_${min}_${max}`,
-    urls
-  });
-}
-console.log(`💰 ${systematicSegments.length} statik fiyat segmenti oluşturuldu`);
-urlStrategies.unshift(...systematicSegments);
 
+  const cleanBaseUrl = urlValidation.cleanURL;
+  const isStorefront = cleanBaseUrl.includes('me=') || storefrontId;
+  
+  if (!isStorefront) {
+    throw new Error('Bu uygulama sadece storefront URL\'leri için çalışır. Lütfen me= parametresi içeren bir URL kullanın.');
+  }
+  
+  console.log(`✅ Base URL validated: ${cleanBaseUrl}`);
+  console.log(`🏪 Storefront detected: ${stats.detectedStorefrontId}`);
+  console.log(`🎯 ULTRA TARGET: ${targetAsinCount} ASIN (20K hedefi!)`);
+  console.log(`📄 Max empty pages in row: ${maxEmptyPagesInRow}`);
 
+  // ULTRA DETAILED strategy generation
+  const strategies = generateUltraDetailedPriceStrategies(cleanBaseUrl, targetAsinCount);
+  
+  console.log(`💰 ${strategies.length} ultra detaylı micro-segment oluşturuldu`);
+  console.log(`📊 Toplam potansiyel sayfa: ${strategies.reduce((sum, s) => sum + s.urls.length, 0)}`);
+  console.log(`🚀 Hedef: 20.000 ASIN (ortalama 1.55 ASIN/sayfa ile ~12.900 sayfa gerekli)`);
 
-  // STRATEJİ 1: Sıralamalar
-  for (const sort of sortOptions) {
-    const sortedBaseUrl = addSortToUrl(baseUrl, sort);
-    const urls = [];
-    for (let i = 1; i <= maxPages; i++) {
-      urls.push({
-        url: `${ensurePageParam(sortedBaseUrl)}${i}`,
-        type: 'sort',
-        strategy: sort,
-        page: i
-      });
+  // Process strategies
+  for (let strategyIndex = 0; strategyIndex < strategies.length; strategyIndex++) {
+    const strategy = strategies[strategyIndex];
+    
+    console.log(`\n🔍 Micro-Segment ${strategyIndex + 1}/${strategies.length}: ${strategy.name}`);
+    
+    // Target reached check
+    if (targetAsinCount > 0 && allAsins.size >= targetAsinCount) {
+      console.log(`🎯 20K ASIN hedefine ulaşıldı: ${allAsins.size}/${targetAsinCount}! 🎉`);
+      break;
     }
-    urlStrategies.push({ type: 'sort', name: sort, urls });
-  }
 
-  // STRATEJİ 2: Kategoriler
-  let categories = [];
-  if (enableCategorySearch) {
-    categories = await fetchCategories(baseUrl, actualProxy);
-    stats.categoriesFound = categories.length;
-
-    for (const category of categories) {
-      const categoryBaseUrl = buildCategoryUrl(baseUrl, category.id);
-      for (const sort of sortOptions) {
-        const sortedCategoryUrl = addSortToUrl(categoryBaseUrl, sort);
-        console.log(`🧭 Kategori URL oluşturuldu: ${sortedCategoryUrl}`);
-
-        const urls = [];
-        for (let i = 1; i <= maxPages; i++) {
-          urls.push({
-            url: `${ensurePageParam(sortedCategoryUrl)}${i}`,
-            type: 'category_sort',
-            strategy: `${category.name} (${sort})`,
-            categoryId: category.id,
-            categoryName: category.name,
-            sort,
-            page: i
-          });
-        }
-        urlStrategies.push({
-          type: 'category_sort',
-          name: `${category.name} (${sort})`,
-          urls
-        });
-      }
-    }
-  }
-
-  // STRATEJİ 3: Arama terimleri
-  if (searchTerms?.length > 0) {
-    for (const term of searchTerms) {
-      const searchUrl = addSearchTermToUrl(baseUrl, encodeURIComponent(term));
-      const urls = [];
-      for (let i = 1; i <= maxPages; i++) {
-        urls.push({
-          url: `${ensurePageParam(searchUrl)}${i}`,
-          type: 'search',
-          strategy: term,
-          page: i
-        });
-      }
-      urlStrategies.push({ type: 'search', name: term, urls });
-
-      if (enableCategorySearch && categories.length > 0) {
-        for (const category of categories) {
-          const categoryBaseUrl = buildCategoryUrl(baseUrl, category.id);
-          const categorySearchUrl = addSearchTermToUrl(categoryBaseUrl, encodeURIComponent(term));
-          const urls = [];
-          for (let i = 1; i <= maxPages; i++) {
-            urls.push({
-              url: `${ensurePageParam(categorySearchUrl)}${i}`,
-              type: 'category_search',
-              strategy: `${category.name} (${term})`,
-              categoryId: category.id,
-              categoryName: category.name,
-              searchTerm: term,
-              page: i
-            });
-          }
-          urlStrategies.push({
-            type: 'category_search',
-            name: `${category.name} (${term})`,
-            urls
-          });
-        }
-      }
-    }
-    // STRATEJİ 4: Fiyat Aralığına Göre Segmentasyon (sadece relevance ile)
-for (const segment of DEFAULT_PRICE_SEGMENTS) {
-  const pricedUrl = addPriceRangeToUrl(baseUrl, segment.min, segment.max);
-  const urls = [];
-  for (let i = 1; i <= maxPages; i++) {
-    urls.push({
-      url: `${ensurePageParam(pricedUrl)}${i}`,
-      type: 'price_range',
-      strategy: `${segment.min}-${segment.max ?? 'MAX'} USD`,
-      priceMin: segment.min,
-      priceMax: segment.max,
-      page: i
-    });
-  }
-  urlStrategies.push({
-    type: 'price_range',
-    name: `${segment.min}-${segment.max ?? 'MAX'} USD`,
-    urls
-  });
-}
-  }
-
-  // STRATEJİLERİ UYGULA
-  for (const strategy of urlStrategies) {
-    if (targetAsinCount > 0 && allAsins.size >= targetAsinCount) break;
     let emptyPagesInRow = 0;
-    const batchSize = Math.min(concurrency, MAX_BROWSERS);
-
-    if (strategy.type.includes('category')) stats.categoriesSearched++;
-
-    for (let start = 0; start < strategy.urls.length; start += batchSize) {
-      if (targetAsinCount > 0 && allAsins.size >= targetAsinCount) break;
-      if (emptyPagesInRow >= maxEmptyPagesInRow) {
-        stats.strategiesSkipped++;
-        break;
+    let strategyHasResults = false;
+    let shouldBreakStrategy = false;
+    let segmentStats = {
+      totalPages: 0,
+      successfulPages: 0,
+      totalAsins: 0,
+      newAsins: 0,
+      startTime: Date.now()
+    };
+    
+    // Process pages in batches
+    for (let i = 0; i < strategy.urls.length && !shouldBreakStrategy; i += concurrency) {
+      const batch = strategy.urls.slice(i, i + concurrency);
+      
+      console.log(`📄 ${strategy.name} - Batch ${Math.ceil((i + 1) / concurrency)}: ${batch.length} sayfa (${i + 1}-${i + batch.length})`);
+      
+      // Validate URLs in batch
+      const validatedBatch = [];
+      for (const urlObj of batch) {
+        const validation = urlValidator.validateAndCleanURL(urlObj.url);
+        if (validation.isValid) {
+          validatedBatch.push({
+            ...urlObj,
+            url: validation.cleanURL
+          });
+        } else {
+          console.warn(`⚠️ Geçersiz URL atlandı: ${urlObj.url}`);
+          stats.urlValidationErrors++;
+        }
       }
 
-      const batch = strategy.urls.slice(start, start + batchSize);
-      const results = await Promise.all(batch.map(urlObj => scrapeSinglePage(urlObj.url, actualProxy)));
+      if (validatedBatch.length === 0) {
+        console.warn(`⚠️ Batch'te geçerli URL kalmadı`);
+        continue;
+      }
 
-      let batchHasResults = false;
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
-        totalBytes += result.bytesTransferred || 0;
-        const urlInfo = batch[i];
+      // Process batch
+      const results = await Promise.all(
+        validatedBatch.map(urlObj => scrapeSinglePage(urlObj.url, true))
+      );
+
+      // Process results
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        const urlInfo = validatedBatch[j];
         stats.pagesProcessed++;
+        segmentStats.totalPages++;
 
         if (result.success) {
           stats.successfulRequests++;
+          segmentStats.successfulPages++;
+          
           const sizeBefore = allAsins.size;
           result.asins.forEach(asin => allAsins.add(asin));
-          const newAsins = allAsins.size - sizeBefore;
+          const newAsinsCount = allAsins.size - sizeBefore;
+          
+          segmentStats.totalAsins += result.asins.length;
+          segmentStats.newAsins += newAsinsCount;
 
-          if (newAsins > 0) {
+          if (result.asins.length === 0) {
+            console.log(`⚠️ ${urlInfo.priceRange} sayfa ${urlInfo.page}: BOŞ SAYFA`);
+            emptyPagesInRow++;
+          } else if (newAsinsCount > 0) {
+            console.log(`✅ ${urlInfo.priceRange} sayfa ${urlInfo.page}: ${result.asins.length} ASIN (${newAsinsCount} yeni)`);
             emptyPagesInRow = 0;
-            batchHasResults = true;
+            strategyHasResults = true;
           } else {
+            console.log(`🔄 ${urlInfo.priceRange} sayfa ${urlInfo.page}: ${result.asins.length} ASIN (tekrar) - BOŞ SAYFA`);
             emptyPagesInRow++;
           }
-        } else if (result.blocked) {
+        } else if (result.blocked || result.captcha) {
           stats.blockedRequests++;
-           console.warn(`🛑 Captcha engeliyle karşılaşıldı: ${urlInfo.url}`);
+          console.log(`🚫 ${urlInfo.priceRange} sayfa ${urlInfo.page}: Engellenmiş`);
+          emptyPagesInRow++;
         } else {
           stats.errorRequests++;
+          console.log(`❌ ${urlInfo.priceRange} sayfa ${urlInfo.page}: ${result.error || 'Hata'}`);
+          emptyPagesInRow++;
+        }
+
+        // Progress with 20K target
+        const progressPercentage = Math.min(100, Math.round((allAsins.size / targetAsinCount) * 100));
+        const remainingAsins = targetAsinCount - allAsins.size;
+        const currentRate = allAsins.size / stats.pagesProcessed;
+        const estimatedPagesNeeded = Math.ceil(remainingAsins / currentRate);
+        
+        console.log(`📊 İlerleme: ${allAsins.size}/${targetAsinCount} ASIN (%${progressPercentage}) | Kalan: ${remainingAsins} | Tahmini sayfa: ${estimatedPagesNeeded}`);
+        
+        // 2 boş sayfa kontrolü
+        if (emptyPagesInRow >= maxEmptyPagesInRow) {
+          console.log(`🔄 ${strategy.name}: ${maxEmptyPagesInRow} boş sayfa → SONRAKİ MICRO-SEGMENT`);
+          stats.strategiesSkipped++;
+          shouldBreakStrategy = true;
+          break;
         }
       }
-// İlerleme durumunu logla
-if (targetAsinCount > 0) {
-  const progressPercentage = Math.min(100, Math.round((allAsins.size / targetAsinCount) * 100));
-  console.log(`📊 İlerleme: ${allAsins.size}/${targetAsinCount} ASIN (%${progressPercentage})`);
-} else {
-  console.log(`📊 Toplam: ${allAsins.size} benzersiz ASIN bulundu`);
-}
 
-      if (!batchHasResults) emptyPagesInRow++;
+      if (shouldBreakStrategy) break;
+
+      // Target reached check
+      if (targetAsinCount > 0 && allAsins.size >= targetAsinCount) {
+        console.log(`🎯 20K ASIN hedefine ulaşıldı!`);
+        return buildFinalResult(allAsins, stats, targetAsinCount, true);
+      }
+
+      // Rate limiting
+      if (i + concurrency < strategy.urls.length && !shouldBreakStrategy) {
+        const delay = 800 + Math.random() * 1200; // Biraz daha hızlı (20K için)
+        console.log(`⏱️ Batch arası: ${(delay/1000).toFixed(1)}s`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
 
-    stats.strategiesUsed++;
+    // Segment completion
+    segmentStats.duration = Date.now() - segmentStats.startTime;
+    segmentStats.asinPerMinute = segmentStats.newAsins / (segmentStats.duration / 60000);
+    stats.segmentPerformance[strategy.name] = segmentStats;
+
+    if (strategyHasResults && !shouldBreakStrategy) {
+      stats.strategiesUsed++;
+      stats.strategiesCompleted++;
+      console.log(`✅ Micro-segment tamamlandı: ${strategy.name} - ${segmentStats.newAsins} yeni ASIN (${segmentStats.asinPerMinute.toFixed(1)} ASIN/dk)`);
+    } else {
+      if (!shouldBreakStrategy) stats.strategiesSkipped++;
+      console.log(`❌ Micro-segment boş: ${strategy.name} - ${segmentStats.newAsins} yeni ASIN`);
+    }
   }
-  console.log(`📦 Toplam veri kullanımı: ${(totalBytes / 1024 / 1024).toFixed(2)} MB`);
+
+  return buildFinalResult(allAsins, stats, targetAsinCount, false);
+}
+
+function generateUltraDetailedPriceStrategies(baseUrl, targetAsinCount) {
+  const strategies = [];
+  
+  // ULTRA DETAILED MICRO-SEGMENTATION - 20.000 ASIN için
+  const microSegments = [];
+  
+  // $0-100 arası: 5$ aralıklarla (20 segment × 20 sayfa = 400 sayfa)
+  for (let i = 0; i < 100; i += 5) {
+    microSegments.push({
+      min: i,
+      max: i + 5,
+      label: `$${i}-${i + 5}`,
+      expectedDensity: 'very-high',
+      pages: 20
+    });
+  }
+  
+  // $100-200 arası: 10$ aralıklarla (10 segment × 20 sayfa = 200 sayfa)
+  for (let i = 100; i < 200; i += 10) {
+    microSegments.push({
+      min: i,
+      max: i + 10,
+      label: `$${i}-${i + 10}`,
+      expectedDensity: 'high',
+      pages: 20
+    });
+  }
+  
+  // $200-500 arası: 20$ aralıklarla (15 segment × 20 sayfa = 300 sayfa)
+  for (let i = 200; i < 500; i += 20) {
+    microSegments.push({
+      min: i,
+      max: i + 20,
+      label: `$${i}-${i + 20}`,
+      expectedDensity: 'medium',
+      pages: 20
+    });
+  }
+  
+  // $500-1000 arası: 50$ aralıklarla (10 segment × 20 sayfa = 200 sayfa)
+  for (let i = 500; i < 1000; i += 50) {
+    microSegments.push({
+      min: i,
+      max: i + 50,
+      label: `$${i}-${i + 50}`,
+      expectedDensity: 'low',
+      pages: 20
+    });
+  }
+  
+  // $1000-2000 arası: 100$ aralıklarla (10 segment × 20 sayfa = 200 sayfa)
+  for (let i = 1000; i < 2000; i += 100) {
+    microSegments.push({
+      min: i,
+      max: i + 100,
+      label: `$${i}-${i + 100}`,
+      expectedDensity: 'very-low',
+      pages: 20
+    });
+  }
+  
+  // $2000+ (1 segment × 20 sayfa = 20 sayfa)
+  microSegments.push({
+    min: 2000,
+    max: null,
+    label: '$2000+',
+    expectedDensity: 'ultra-low',
+    pages: 20
+  });
+
+  console.log(`💰 ${microSegments.length} micro-segment oluşturuldu:`);
+  console.log(`   • $0-100: 5$ aralıklar (20 segment × 20 sayfa = 400 sayfa)`);
+  console.log(`   • $100-200: 10$ aralıklar (10 segment × 20 sayfa = 200 sayfa)`);
+  console.log(`   • $200-500: 20$ aralıklar (15 segment × 20 sayfa = 300 sayfa)`);
+  console.log(`   • $500-1000: 50$ aralıklar (10 segment × 20 sayfa = 200 sayfa)`);
+  console.log(`   • $1000-2000: 100$ aralıklar (10 segment × 20 sayfa = 200 sayfa)`);
+  console.log(`   • $2000+: 1 segment × 20 sayfa = 20 sayfa`);
+  
+  const totalPotentialPages = microSegments.reduce((sum, seg) => sum + seg.pages, 0);
+  console.log(`📊 TOPLAM: ${totalPotentialPages} sayfa (${totalPotentialPages * 16} potansiyel ASIN kapasitesi)`);
+
+  // Her micro-segment için strategy oluştur
+  for (const segment of microSegments) {
+    const urls = [];
+    const segmentBaseUrl = addPriceRangeToUrl(baseUrl, segment.min, segment.max);
+    
+    for (let page = 1; page <= segment.pages; page++) {
+      urls.push({
+        url: addPageParam(segmentBaseUrl, page),
+        priceRange: segment.label,
+        page: page,
+        type: 'micro_price_segment',
+        minPrice: segment.min,
+        maxPrice: segment.max,
+        expectedDensity: segment.expectedDensity
+      });
+    }
+    
+    strategies.push({
+      name: `Micro-Segment: ${segment.label}`,
+      type: 'micro_price_segment',
+      urls: urls,
+      priceMin: segment.min,
+      priceMax: segment.max,
+      expectedDensity: segment.expectedDensity,
+      maxPages: segment.pages
+    });
+  }
+
+  // Yüksek density önce
+  strategies.sort((a, b) => {
+    const densityOrder = { 'very-high': 0, 'high': 1, 'medium': 2, 'low': 3, 'very-low': 4, 'ultra-low': 5 };
+    return densityOrder[a.expectedDensity] - densityOrder[b.expectedDensity];
+  });
+  
+  console.log(`🎯 Micro-segmentler density'ye göre sıralandı (very-high → ultra-low)`);
+  
+  return strategies;
+}
+
+// Helper functions (aynı)
+function extractStorefrontId(url) {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.searchParams.get('me') || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function addPageParam(url, page) {
+  try {
+    const urlObj = new URL(url);
+    urlObj.searchParams.set('page', page.toString());
+    return urlObj.toString();
+  } catch (e) {
+    const connector = url.includes('?') ? '&' : '?';
+    return `${url}${connector}page=${page}`;
+  }
+}
+
+function addPriceRangeToUrl(url, minPrice, maxPrice) {
+  try {
+    const urlObj = new URL(url);
+    
+    const currentRh = urlObj.searchParams.get('rh') || '';
+    const cleanRh = currentRh.replace(/p_36:[^,]*,?/g, '').replace(/,$/, '');
+    
+    const priceFilter = maxPrice ? 
+      `p_36:${minPrice * 100}-${maxPrice * 100}` : 
+      `p_36:${minPrice * 100}-`;
+    
+    const newRh = cleanRh ? `${cleanRh},${priceFilter}` : priceFilter;
+    urlObj.searchParams.set('rh', newRh);
+    
+    return urlObj.toString();
+  } catch (e) {
+    const connector = url.includes('?') ? '&' : '?';
+    const priceFilter = maxPrice ? 
+      `p_36:${minPrice * 100}-${maxPrice * 100}` : 
+      `p_36:${minPrice * 100}-`;
+    return `${url}${connector}rh=${priceFilter}`;
+  }
+}
+
+function buildFinalResult(allAsins, stats, targetAsinCount, targetReached) {
+  const successRate = stats.pagesProcessed > 0 ? 
+    Math.round((stats.successfulRequests / stats.pagesProcessed) * 100) : 0;
+
+  const segmentsByPerformance = Object.entries(stats.segmentPerformance)
+    .map(([name, data]) => ({ name, ...data }))
+    .sort((a, b) => b.asinPerMinute - a.asinPerMinute)
+    .slice(0, 10); // Top 10 göster
 
   return {
     asins: Array.from(allAsins),
     stats: {
       uniqueAsinCount: allAsins.size,
       ...stats,
-      targetReached: targetAsinCount > 0 && allAsins.size >= targetAsinCount
+      successRate: `${successRate}%`,
+      targetReached,
+      completionRate: targetAsinCount > 0 ? 
+        `${Math.min(100, Math.round((allAsins.size / targetAsinCount) * 100))}%` : '100%',
+      topPerformingMicroSegments: segmentsByPerformance,
+      averageAsinPerPage: (allAsins.size / stats.pagesProcessed).toFixed(2)
     }
   };
 }
