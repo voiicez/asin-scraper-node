@@ -173,7 +173,7 @@ async function getAsinsWithStrategy(config) {
 
       // Rate limiting
       if (i + concurrency < strategy.urls.length && !shouldBreakStrategy) {
-        const delay = 800 + Math.random() * 1200; // Biraz daha hızlı (20K için)
+       const delay = 640 + Math.random() * 960;
         console.log(`⏱️ Batch arası: ${(delay/1000).toFixed(1)}s`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }

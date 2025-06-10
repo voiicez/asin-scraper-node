@@ -193,7 +193,7 @@ async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) 
     // Ana sayfa yükleme
     console.log(`📄 Sayfa yükleniyor: ${url}`);
     await page.goto(url, {
-      timeout: 35000,
+      timeout: 5000,
       waitUntil: 'domcontentloaded'
     });
 
@@ -245,7 +245,7 @@ async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) 
                document.body.innerText.includes('No results') ||
                document.body.innerText.includes('no results found') ||
                document.body.innerText.includes('did not match any products');
-      }, { timeout: 20000 });
+      }, { timeout: 5000 });
       
       console.log(`✅ ASIN listesi yüklendi: ${url}`);
     } catch (e) {
