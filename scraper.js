@@ -1,5 +1,4 @@
 // scraper.js - Enhanced Bot Detection ile Güncellenmiş (Kategori çıkarma kaldırıldı)
-const { getBrowser, returnBrowser } = require('./browserPools');
 const WebshareProxyManager = require('./webshareManager');
 const BrowserFingerprintManager = require('./fingerprintManager');
 const HumanBehaviorSimulator = require('./humanBehavior');
@@ -25,7 +24,7 @@ async function initWebshareProxies() {
   return webshareManager;
 }
 
-async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) {
+async function scrapeSinglePage(url, session) {
   // URL validation first
   const urlValidation = urlValidator.validateAndCleanURL(url);
   if (!urlValidation.isValid) {
@@ -54,94 +53,17 @@ async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) 
     }
   }
 
-  let browser = null;
-  let forceClose = false;
-  let proxySettings = null;
-  let selectedProxy = null;
-  let session = null;
-  let behavior = null;
-  let fingerprint = null;
+  const sessionId = session ? session.id : null;
+  const selectedProxy = session ? session.proxyInfo : null;
+  const behavior = session ? session.behavior : new HumanBehaviorSimulator();
+  const fingerprint = session ? session.fingerprint : fingerprintManager.generateFingerprint('us');
+  const context = session ? session.context : null;
+  if (!context) {
+    throw new Error('Session context not available');
+  }
   const startTime = Date.now();
 
   try {
-    // Webshare proxy manager'ı başlat
-    if (useWebshareProxy && !webshareManager) {
-      await initWebshareProxies();
-    }
-
-    // Session yönetimi
-    if (sessionId) {
-      session = sessionManager.getSession(sessionId);
-      if (!session) {
-        console.warn(`⚠️ Session bulunamadı, yeni session oluşturuluyor: ${sessionId}`);
-      }
-    }
-
-    // Proxy seçimi
-    if (useWebshareProxy && webshareManager) {
-      selectedProxy = webshareManager.getNextProxy();
-      if (!selectedProxy) {
-        console.warn('⚠️ Webshare proxy alınamadı, proxy olmadan devam ediliyor');
-        proxySettings = null;
-      } else {
-        proxySettings = webshareManager.getProxySettings(selectedProxy);
-        console.log(`🌐 Webshare proxy seçildi: ${selectedProxy.ip}`);
-        
-        // Session yoksa proxy bilgisi ile oluştur
-        if (!session && selectedProxy) {
-          sessionId = sessionManager.createSession(selectedProxy, 'us');
-          session = sessionManager.getSession(sessionId);
-        }
-      }
-    } else if (useWebshareProxy && !webshareManager) {
-      console.warn('⚠️ Webshare manager henüz yüklenmemiş, başlatılıyor...');
-      try {
-        await initWebshareProxies();
-        selectedProxy = webshareManager.getNextProxy();
-        if (selectedProxy) {
-          proxySettings = webshareManager.getProxySettings(selectedProxy);
-          console.log(`🌐 Geç yüklenen proxy kullanılıyor: ${selectedProxy.ip}`);
-        }
-      } catch (e) {
-        console.warn('⚠️ Webshare proxy başlatılamadı:', e.message);
-        proxySettings = null;
-      }
-    }
-
-    // Fingerprint ve behavior
-    if (session) {
-      fingerprint = session.fingerprint;
-      behavior = session.behavior;
-    } else {
-      fingerprint = fingerprintManager.generateFingerprint('us');
-      behavior = new HumanBehaviorSimulator();
-    }
-
-    // Browser context oluşturma
-    browser = await getBrowser();
-    
-    const contextOptions = fingerprintManager.prepareContextOptions(fingerprint);
-    contextOptions.proxy = proxySettings;
-    
-    // Enhanced context settings
-    Object.assign(contextOptions, {
-      clearCookiesAfterUse: true,
-      javaScriptEnabled: true,
-      bypassCSP: true,
-      ignoreHTTPSErrors: true
-    });
-    
-    // Proxy settings - null check ekle
-    if (proxySettings && proxySettings.server) {
-      contextOptions.proxy = proxySettings;
-      console.log(`🌐 Proxy kullanılıyor: ${proxySettings.server.replace('http://', '')}`);
-    } else {
-      console.log(`🌐 Proxy olmadan devam ediliyor`);
-      // Proxy yoksa context options'tan proxy'yi kaldır
-      delete contextOptions.proxy;
-    }
-
-    const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
 
     // Advanced anti-detection script injection
@@ -210,7 +132,6 @@ async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) 
       );
       
       if (!captchaResolved) {
-        await context.close();
         const responseTime = Date.now() - startTime;
         
         // Proxy ve session sonucu kaydet
@@ -255,7 +176,6 @@ async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) 
     // Final CAPTCHA check
     if (await captchaHandler.detectCaptcha(page)) {
       console.warn(`🛑 İkinci CAPTCHA tespit edildi, sayfa atlanıyor: ${url}`);
-      await context.close();
       
       const responseTime = Date.now() - startTime;
       if (selectedProxy) {
@@ -321,7 +241,6 @@ async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) 
     // Kategori çıkarma tamamen kaldırıldı - sadece boş array döner
     const categories = [];
 
-    await context.close();
 
     // Performance metrics
     const responseTime = Date.now() - startTime;
@@ -350,7 +269,6 @@ async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) 
 
   } catch (error) {
     console.log(`❌ Scraping hatası: ${url} - ${error.message}`);
-    forceClose = true;
     
     const responseTime = Date.now() - startTime;
     const errorType = error.name || 'UnknownError';
@@ -372,10 +290,6 @@ async function scrapeSinglePage(url, useWebshareProxy = true, sessionId = null) 
       proxy: selectedProxy?.ip,
       sessionId
     };
-  } finally {
-    if (browser) {
-      await returnBrowser(browser, forceClose);
-    }
   }
 }
 

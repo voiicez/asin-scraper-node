@@ -153,8 +153,16 @@ if (cluster.isMaster) {
         const startTime = Date.now();
         
         // Basit test için scraper'ı import et
-        const { scrapeSinglePage } = require('./scraper');
-        const result = await scrapeSinglePage(url, true);
+        const { scrapeSinglePage, getSessionManager, initWebshareProxies, getWebshareManager } = require('./scraper');
+
+        await initWebshareProxies();
+        const sm = getSessionManager();
+        const wm = getWebshareManager();
+        const proxy = wm.getNextProxy();
+        const sessionId = await sm.createSession(proxy, 'us');
+        const session = sm.getSession(sessionId);
+        const result = await scrapeSinglePage(url, session);
+        await sm.removeSession(sessionId);
         
         const duration = Date.now() - startTime;
         

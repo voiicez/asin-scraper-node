@@ -1,6 +1,6 @@
 // strategyBuilder.js - 20.000 ASIN için ultra detaylı micro-segmentation
 const URLValidator = require('./urlValidator');
-const { scrapeSinglePage } = require('./scraper');
+const { scrapeSinglePage, getSessionManager, initWebshareProxies, getWebshareManager } = require('./scraper');
 
 const urlValidator = new URLValidator();
 
@@ -102,9 +102,19 @@ async function getAsinsWithStrategy(config) {
         continue;
       }
 
-      // Process batch
+      // Process batch with individual sessions
+      await initWebshareProxies();
+      const sm = getSessionManager();
+      const wm = getWebshareManager();
       const results = await Promise.all(
-        validatedBatch.map(urlObj => scrapeSinglePage(urlObj.url, true))
+        validatedBatch.map(async urlObj => {
+          const proxy = wm.getNextProxy();
+          const sessionId = await sm.createSession(proxy, 'us');
+          const sess = sm.getSession(sessionId);
+          const res = await scrapeSinglePage(urlObj.url, sess);
+          await sm.removeSession(sessionId);
+          return res;
+        })
       );
 
       // Process results
