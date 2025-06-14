@@ -1,6 +1,7 @@
 // sessionManager.js - Gelişmiş Session Yöneticisi
 const BrowserFingerprintManager = require('./fingerprintManager');
 const HumanBehaviorSimulator = require('./humanBehavior');
+const { getBrowser } = require('./browserPools');
 
 class SessionManager {
   constructor() {
@@ -36,7 +37,7 @@ class SessionManager {
     this.initSessionRotation();
   }
 
-  createSession(proxyInfo, countryCode = 'us') {
+  async createSession(proxyInfo, countryCode = 'us') {
     // Eğer bu proxy için zaten aktif session varsa onu döndür
     const existingSessionId = this.proxySessionMap.get(proxyInfo.id);
     if (existingSessionId && this.sessions.has(existingSessionId)) {
@@ -46,7 +47,7 @@ class SessionManager {
         return existingSessionId;
       } else {
         // Geçersiz session'ı temizle
-        this.removeSession(existingSessionId);
+        await this.removeSession(existingSessionId);
       }
     }
 
@@ -60,7 +61,19 @@ class SessionManager {
     const sessionId = `${countryCode}_${proxyInfo.id}_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const fingerprint = this.fingerprintManager.generateFingerprint(countryCode);
     const behavior = new HumanBehaviorSimulator();
-    
+    const browser = await getBrowser();
+
+    const contextOptions = {
+      userAgent: fingerprint.userAgent,
+      locale: fingerprint.locale,
+      timezoneId: fingerprint.timezone,
+      viewport: fingerprint.userAgent.includes('Mobile')
+        ? { width: 390, height: 844 }
+        : fingerprint.viewport
+    };
+
+    const context = await browser.newContext(contextOptions);
+
     // Yoğun saatlere göre behavior ayarla
     behavior.adjustForTrafficHours();
     
@@ -69,6 +82,7 @@ class SessionManager {
       proxyInfo,
       fingerprint,
       behavior,
+      context,
       countryCode: countryCode.toLowerCase(),
       
       // Timestamps
@@ -306,16 +320,24 @@ class SessionManager {
     return 'Unknown reason';
   }
 
-  removeSession(sessionId) {
+  async removeSession(sessionId) {
     const session = this.sessions.get(sessionId);
     if (session) {
       // Proxy mapping'i temizle
       this.proxySessionMap.delete(session.proxyInfo.id);
-      
+
+      if (session.context) {
+        try {
+          await session.context.close();
+        } catch (e) {
+          console.warn('Context close error:', e.message);
+        }
+      }
+
       // Session'ı sil
       this.sessions.delete(sessionId);
       this.globalStats.totalSessionsExpired++;
-      
+
       console.log(`🗑️ Session kaldırıldı: ${sessionId}`);
     }
   }
