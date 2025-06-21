@@ -67,10 +67,10 @@ if (cluster.isMaster) {
 
     const config = {
       baseUrl,
-      maxPages: parseInt(pages) || 100,
+      maxPages: parseInt(pages) || 200,
       targetAsinCount: parseInt(target_asins) || 1000,
-      concurrency: parseInt(concurrency) || 3,
-      maxEmptyPagesInRow: 2, // Sabit 2 boş sayfa
+      concurrency: parseInt(concurrency) || 5,
+      maxEmptyPagesInRow: 3, // Sabit 2 boş sayfa
       storefrontId: storefront_id || null
     };
 

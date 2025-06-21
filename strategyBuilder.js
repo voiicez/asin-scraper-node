@@ -214,7 +214,7 @@ function generateUltraDetailedPriceStrategies(baseUrl, targetAsinCount) {
   const microSegments = [];
   
   // $0-100 arası: 5$ aralıklarla (20 segment × 20 sayfa = 400 sayfa)
-  for (let i = 0; i < 100; i += 5) {
+  for (let i = 20; i < 100; i += 5) {
     microSegments.push({
       min: i,
       max: i + 5,
