@@ -13,7 +13,8 @@ const {
 
 // Worker sayısı = CPU sayısı - 1
 const NUM_WORKERS = Math.max(1, os.cpus().length - 1);
-
+const { enableFastMode } = require('./fastMode');
+enableFastMode();
 if (cluster.isMaster) {
   console.log(`🚀 Ana süreç ${process.pid} başlatıldı, ${NUM_WORKERS} işçi oluşturuluyor...`);
   for (let i = 0; i < NUM_WORKERS; i++) {
